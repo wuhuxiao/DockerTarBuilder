@@ -6,7 +6,7 @@ on:
       docker_images:
         description: '请填写docker镜像名称 多个用英文逗号分开'
         required: true
-        default: 'alpine:latest,busybox:stable-glibc'  # 设置默认的 Docker 镜像列表
+        default: 'alpine:latest,busybox:stable-glibc'
 
 jobs:
   pull_and_package:
@@ -16,23 +16,39 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # --- 关键步骤 1: 安装 QEMU 仿真器 ---
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    # --- 关键步骤 2: 设置 Buildx 环境 ---
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
     - name: Pull Docker Images and Package
       run: |
         images="${{ github.event.inputs.docker_images }}"
-          IFS=',' read -r -a image_array <<< "$images"
-          for image in "${image_array[@]}"; do
-            docker pull "${image}" --platform "linux/arm64"
-            image_name="${image//\//_}"
-            image_name="${image_name//:/_}"
-            docker save "${image}" -o "${image_name}-arm64.tar"
-            gzip -c "${image_name}-arm64.tar" > "${image_name}-arm64.tar.gz"
-            rm "${image_name}-arm64.tar"
-          done
+        # 将逗号替换为空格并处理可能存在的空格
+        IFS=',' read -r -a image_array <<< "$(echo $images | sed 's/ //g')"
+        
+        for image in "${image_array[@]}"; do
+          echo "[INFO] Processing image: ${image}"
+          
+          # 显式使用 --platform 并拉取
+          docker pull "${image}" --platform "linux/arm64"
+          
+          # 生成合规的文件名
+          image_name=$(echo "${image}" | sed 's/[\/:]/_/g')
+          
+          echo "[INFO] Saving ${image} to ${image_name}-arm64.tar"
+          docker save "${image}" -o "${image_name}-arm64.tar"
+          
+          gzip -c "${image_name}-arm64.tar" > "${image_name}-arm64.tar.gz"
+          rm "${image_name}-arm64.tar"
+        done
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: my-artifact
+        name: arm64-images-package
         path: ${{ github.workspace }}/*.tar.gz
-        retention-days: 1  # 将保留天数设置为 1 天 最多可设置90天
-
+        retention-days: 1
