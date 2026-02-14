@@ -6,7 +6,7 @@ on:
       docker_images:
         description: '请填写docker镜像名称 多个用英文逗号分开'
         required: true
-        default: 'alpine:latest,busybox:stable-glibc'
+        default: 'kubernetesui/metrics-scraper:v1.0.6'
 
 jobs:
   pull_and_package:
@@ -16,32 +16,34 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # --- 关键步骤 1: 安装 QEMU 仿真器 ---
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
+    # --- 关键：安装 Skopeo ---
+    - name: Install Skopeo
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y skopeo
 
-    # --- 关键步骤 2: 设置 Buildx 环境 ---
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Pull Docker Images and Package
+    - name: Pull and Package using Skopeo
       run: |
         images="${{ github.event.inputs.docker_images }}"
-        # 将逗号替换为空格并处理可能存在的空格
         IFS=',' read -r -a image_array <<< "$(echo $images | sed 's/ //g')"
         
         for image in "${image_array[@]}"; do
-          echo "[INFO] Processing image: ${image}"
+          echo "[INFO] Processing image via Skopeo: ${image}"
           
-          # 显式使用 --platform 并拉取
-          docker pull "${image}" --platform "linux/arm64"
-          
-          # 生成合规的文件名
+          # 生成文件名
           image_name=$(echo "${image}" | sed 's/[\/:]/_/g')
           
-          echo "[INFO] Saving ${image} to ${image_name}-arm64.tar"
-          docker save "${image}" -o "${image_name}-arm64.tar"
-          
+          # --- 核心逻辑 ---
+          # 1. 强制指定 arm64 架构
+          # 2. docker-archive 格式等价于 docker save 生成的格式
+          # 3. 如果仓库需要登录，skopeo 会自动读取默认 docker 配置，或使用 --src-creds
+          skopeo copy \
+            --override-arch arm64 \
+            --override-os linux \
+            docker://${image} \
+            docker-archive:${image_name}-arm64.tar:${image}
+
+          echo "[INFO] Compressing..."
           gzip -c "${image_name}-arm64.tar" > "${image_name}-arm64.tar.gz"
           rm "${image_name}-arm64.tar"
         done
